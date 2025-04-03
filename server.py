@@ -9,14 +9,13 @@ from fastapi.websockets import WebSocketDisconnect
 from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from dotenv import load_dotenv
 
+from common.prompt import PROMPT_TEMPLATE, PROMPT_TEMPLATE_UPDATE
+from common.agent_functions import (
+    is_available,
+    find_nearest_location,
+    upsale_service
+)
 from openai import OpenAI
-
-# from common.agent_functions import (
-#     is_available, 
-#     find_nearest_location,
-#     upsale_service
-# )
-from common.prompt import PROMPT_TEMPLATE
 
 load_dotenv()
 
@@ -24,10 +23,10 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 PORT = int(os.getenv('PORT', 5050))
 SYSTEM_MESSAGE = (
-    """
-    Your task is find nearest massage envy franchised in Downey, CA?
-    Say: "Would you like to know the nearest massage envy franchised in Downey, CA?
-    """
+    "You are a helpful and bubbly AI assistant who loves to chat about "
+    "anything the user is interested in and is prepared to offer them facts. "
+    "You have a penchant for dad jokes, owl jokes, and rickrolling – subtly. "
+    "Always stay positive, but work in a joke when appropriate."
 )
 VOICE = 'alloy'
 LOG_EVENT_TYPES = [
@@ -43,25 +42,27 @@ app = FastAPI()
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
 
-async def find_nearest_location(params):
-    try:
-        print("**********Please wait for response*************")
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        address = params.get("address")
-        prompt = f"Find 1 Massage Envy location near {address}. Only get location's name and address."
-        completion = client.chat.completions.create(
-            model="gpt-4o-search-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-        )
-        return completion.choices[0].message.content
-    except Exception as err:
-        print("Error: ", err)
-        return "There are no nearest franchised."
+
+# async def find_nearest_location(params):
+#     try:
+#         print("**********Please wait for response*************")
+#         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+#         address = params.get("address")
+#         prompt = f"Find 1 Massage Envy location near {address}. Only get location's name and address."
+#         completion = client.chat.completions.create(
+#             model="gpt-4o-search-preview",
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": prompt
+#                 }
+#             ],
+#         )
+#         return completion.choices[0].message.content
+#     except Exception as err:
+#         print("Error: ", err)
+#         return "There are no nearest franchised."
+
 
 @app.get("/", response_class=JSONResponse)
 async def index_page():
@@ -74,7 +75,7 @@ async def handle_incoming_call(request: Request):
     # <Say> punctuation to improve text-to-speech flow
     # response.say("Please wait while we connect your call to the A. I. voice assistant, powered by Twilio and the Open-A.I. Realtime API")
     # response.pause(length=1)
-    # response.say("O.K. you can start talking!")
+    response.say("This is Massage Envy, How can I assist you today?")
     host = request.url.hostname
     connect = Connect()
     connect.stream(url=f'wss://{host}/media-stream')
@@ -172,32 +173,70 @@ async def handle_media_stream(websocket: WebSocket):
                         print("Function called:", response)
                         functionName = response.get("name")
                         params = json.loads(response.get("arguments"))
+
                         if functionName == "find_nearest_location":
                             locationMessage = await find_nearest_location(params)
                             print("*********Location: ", locationMessage)
+
                             functionOutputEvent = {
                                 "type": "conversation.item.create",
                                 "item": {
-                                    "type": "function_call_output",
-                                    "role": "assistant",
-                                    "type": "assistant",
-                                    "output": locationMessage,  # Provide the booking status
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": f"The nearest location is {locationMessage}"
+                                        }
+                                    ]
                                 }
                             }
                             await openai_ws.send(json.dumps(functionOutputEvent))
-                            await openai_ws.send(json.dumps({
-                                "type": "response.create",
-                                "response": {
-                                    "modalities": ["text", "audio"],
-                                    "instructions": f'Here is the nearest location Massage Envy franchised:${locationMessage}.',
-                                }
-                            }))
-                        
-                    if response.get('type') == 'response.done':
-                        print(response.get('response'))
 
-                    if response.get('type') == 'conversation.item.input_audio_transcription.completed' and response.get("transcript", None) is not None:
-                        print(response)
+                            # Ensure the assistant continues speaking
+                            await openai_ws.send(json.dumps({"type": "response.create"}))
+                        if functionName == "is_therapist_availble":
+                            checkMessage = await is_available(params)
+                            print("*********Location: ", checkMessage)
+
+                            functionOutputEvent = {
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": checkMessage
+                                        }
+                                    ]
+                                }
+                            }
+                            await openai_ws.send(json.dumps(functionOutputEvent))
+
+                            # Ensure the assistant continues speaking
+                            await openai_ws.send(json.dumps({"type": "response.create"}))
+                        if functionName == "enhancement_option":
+                            enhancementMessage = await upsale_service(params)
+                            print("*********enhancementMessage: ", enhancementMessage)
+
+                            functionOutputEvent = {
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": f"This is enhancement options: {locationMessage}"
+                                        }
+                                    ]
+                                }
+                            }
+                            await openai_ws.send(json.dumps(functionOutputEvent))
+
+                            # Ensure the assistant continues speaking
+                            await openai_ws.send(json.dumps({"type": "response.create"}))
             except Exception as e:
                 print(f"Error in send_to_twilio: {e}")
 
@@ -253,7 +292,7 @@ async def send_initial_conversation_item(openai_ws):
             "content": [
                 {
                     "type": "input_text",
-                    "text": "Hello ! Thank you for calling Massage Envy. How can I assist you today?"
+                    "text": "Greet the user with 'Hello there! I am an AI voice assistant powered by Twilio and the OpenAI Realtime API. You can ask me for facts, jokes, or anything you can imagine. How can I help you?'"
                 }
             ]
         }
@@ -271,10 +310,10 @@ async def initialize_session(openai_ws):
             "input_audio_format": "g711_ulaw",
             "output_audio_format": "g711_ulaw",
             "voice": VOICE,
-            "instructions": SYSTEM_MESSAGE,
+            "instructions": PROMPT_TEMPLATE_UPDATE,
             "modalities": ["text", "audio"],
             "temperature": 0.75,
-            "max_token": 250,
+            # "max_token": 250,
             "tools": [  # Define the tools (functions) the AI can use
                         {
                             "type": "function",
@@ -290,11 +329,58 @@ async def initialize_session(openai_ws):
                                 },
                                 "required": ["address"]
                             }
+                        },
+                        {
+                            "type": "function",
+                            "name": "enhancement_option",
+                            "description": """Get information for enhancement services:'Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage Session', 'Microderm Infusion', 'Oxygenating Treatment', 'Total body Stretch Session'""",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "service": {
+                                        "type": "string",
+                                        "description": """- service's name: 'Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage session', 'Microderm Infusion', 'Oxygenating Treatment', 'Rapid Tension Relief session', 'Total Body Stretch session'. if not mention, set default value.
+                                                        Default value: ''""",
+                                        "enum": ['Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage session', 'Microderm Infusion', 'Oxygenating Treatment', 'Rapid Tension Relief session', 'Total Body Stretch session', ''],
+                                    }
+                                },
+                                "required": ["service"],
+                            },
+                        },
+                        {
+                            "type": "function",
+                            "name": "is_therapist_availble",
+                            "description": """
+                            get therapist's status.
+                            Collect user require
+                            - name: technician's name or therapist's name.
+                            - date: it is a weekday (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday).
+                            - service's name: 'Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage session', 'Microderm Infusion', 'Oxygenating Treatment', 'Rapid Tension Relief session', 'Total Body Stretch session'.
+                            """,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "technician's name",
+                                    },
+                                    "date": {
+                                        "type": "string",
+                                        "description": "date: it is a weekday (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday, Today, Tomorrow)",
+                                    },
+                                    "service": {
+                                        "type": "string",
+                                        "description": "- service's name: 'Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage session', 'Microderm Infusion', 'Oxygenating Treatment', 'Rapid Tension Relief session', 'Total Body Stretch session'",
+                                        "enum": ['Chemical Peel', 'Customized Facial', 'Dermaplaning Treatment', 'Massage session', 'Microderm Infusion', 'Oxygenating Treatment', 'Rapid Tension Relief session', 'Total Body Stretch session'],
+                                    },
+                                },
+                                "required": ["name", "date", "service"],
+                            },
                         }
                     ],
-            "tool_choice": "auto"  # Automatically choose the tool
-            }
+            "tool_choice": "auto"
         }
+    }
     print('Sending session update:', json.dumps(session_update))
     await openai_ws.send(json.dumps(session_update))
 
